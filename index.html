@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Oscillating Waves</title>
+
+<style>
+    html,
+    body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #07111f;
+        cursor: crosshair;
+    }
+
+    canvas {
+        display: block;
+    }
+</style>
+</head>
+<body>
+
+<canvas id="canvas"></canvas>
+
+<script>
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+
+let width, height;
+let mouse = {
+    x: -9999,
+    y: -9999
+};
+
+function resize() {
+    width = canvas.width = window.innerWidth;
+    height = canvas.height = window.innerHeight;
+}
+
+window.addEventListener("resize", resize);
+resize();
+
+window.addEventListener("mousemove", (e) => {
+    mouse.x = e.clientX;
+    mouse.y = e.clientY;
+});
+
+window.addEventListener("mouseleave", () => {
+    mouse.x = -9999;
+    mouse.y = -9999;
+});
+
+class WavePoint {
+    constructor(x, baseY, offset) {
+        this.x = x;
+        this.baseY = baseY;
+        this.y = baseY;
+        this.offset = offset;
+
+        this.vx = 0;
+        this.vy = 0;
+    }
+
+    update(time) {
+
+        const wave =
+            Math.sin(time * 0.0015 + this.offset) * 24 +
+            Math.sin(time * 0.0008 + this.offset * 0.5) * 16;
+
+        let targetY = this.baseY + wave;
+
+        const dx = this.x - mouse.x;
+        const dy = this.y - mouse.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        if (dist < 140) {
+            const angle = Math.atan2(dy, dx);
+            const force = (140 - dist) * 0.12;
+
+            this.vx += Math.cos(angle) * force;
+            this.vy += Math.sin(angle) * force;
+        }
+
+        this.vx *= 0.92;
+        this.vy *= 0.92;
+
+        this.x += this.vx * 0.02;
+        this.y += (targetY - this.y) * 0.08 + this.vy * 0.02;
+    }
+}
+
+const waveLayers = [];
+const layerCount = 7;
+const pointsPerWave = 80;
+
+function createWaves() {
+    waveLayers.length = 0;
+
+    for (let l = 0; l < layerCount; l++) {
+
+        const points = [];
+        const y = height * 0.2 + l * (height * 0.1);
+
+        for (let i = 0; i <= pointsPerWave; i++) {
+
+            const x = (i / pointsPerWave) * width;
+
+            points.push(
+                new WavePoint(
+                    x,
+                    y,
+                    i * 0.4 + l
+                )
+            );
+        }
+
+        waveLayers.push(points);
+    }
+}
+
+createWaves();
+window.addEventListener("resize", createWaves);
+
+function drawWave(points, opacity) {
+
+    ctx.beginPath();
+
+    for (let i = 0; i < points.length; i++) {
+
+        const p = points[i];
+
+        if (i === 0) {
+            ctx.moveTo(p.x, p.y);
+        } else {
+
+            const prev = points[i - 1];
+            const cx = (prev.x + p.x) / 2;
+            const cy = (prev.y + p.y) / 2;
+
+            ctx.quadraticCurveTo(prev.x, prev.y, cx, cy);
+        }
+    }
+
+    ctx.strokeStyle = `rgba(255,255,255,${opacity})`;
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+}
+
+function animate(time) {
+
+    ctx.clearRect(0, 0, width, height);
+
+    ctx.fillStyle = "#07111f";
+    ctx.fillRect(0, 0, width, height);
+
+    for (let i = 0; i < waveLayers.length; i++) {
+
+        const wave = waveLayers[i];
+
+        for (const point of wave) {
+            point.update(time + i * 200);
+        }
+
+        drawWave(
+            wave,
+            0.15 + i * 0.08
+        );
+    }
+
+    requestAnimationFrame(animate);
+}
+
+animate(0);
+</script>
+
+</body>
+</html>
