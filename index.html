@@ -13,62 +13,59 @@
     font-family: system-ui, sans-serif;
   }
 
-  /* Full-screen wallpaper background */
   #stage {
     position: fixed;
     inset: 0;
     background: url("Player_Wallpaper.jpg") center / cover no-repeat;
   }
 
-  /* The floating, draggable widget */
   #widget {
     position: absolute;
     top: 80px;
     left: 80px;
-    width: 360px;            /* re-set automatically from the SVG aspect ratio */
-    touch-action: none;       /* needed for smooth pointer dragging */
+    width: 360px;
+    touch-action: none;
     user-select: none;
     cursor: grab;
     filter: drop-shadow(0 12px 30px rgba(0,0,0,.45));
   }
   #widget.dragging { cursor: grabbing; }
 
-  /* Inner box keeps every layer aligned to the same coordinate space */
   #widgetInner {
     position: relative;
     width: 100%;
   }
 
-  /* LAYER 1 — live webcam feed, sits UNDER the skin and shows through it */
+  /* Webcam feed — z-index set in JS so it stays ABOVE the skin */
   #camVideo {
     position: absolute;
     object-fit: cover;
     background: #000;
-    pointer-events: none;
-    z-index: 1;
+    pointer-events: none;     /* clicks pass through to the shutter beneath */
+    z-index: 4;
   }
 
-  /* LAYER 2 — the SVG: invisible, used only to locate the regions */
+  /* SVG: invisible, used only to locate the regions */
   #widgetInner svg {
     position: absolute;
     inset: 0;
     width: 100%;
     height: 100%;
-    opacity: 0;               /* shapes transparent — Taust shows on top */
+    opacity: 0;
     pointer-events: none;
     z-index: 2;
   }
 
-  /* LAYER 3 — Player_Taust.png skin displayed ON TOP */
+  /* Player_Taust.png skin */
   #taust {
     position: absolute;
     inset: 0;
     background: url("Player_Taust.png") center / 100% 100% no-repeat;
-    pointer-events: none;     /* lets drags/clicks pass through to the widget */
-    z-index: 2;
+    pointer-events: none;
+    z-index: 3;
   }
 
-  /* LAYER 5 — transparent clickable shutter over the SVG "button" region */
+  /* Transparent clickable shutter over the SVG "button" region */
   #shutterHit {
     position: absolute;
     cursor: pointer;
@@ -79,7 +76,6 @@
   }
   #shutterHit:active { transform: scale(0.94); }
 
-  /* LAYER 6 — white flash on capture */
   #flash {
     position: absolute;
     inset: 0;
@@ -91,7 +87,6 @@
   }
   #flash.fire { opacity: .9; transition: none; }
 
-  /* Captured-photo tray */
   #tray {
     position: absolute;
     left: 0; right: 0;
@@ -130,7 +125,6 @@
   <div id="widget">
     <div id="widgetInner">
       <video id="camVideo" autoplay playsinline muted></video>
-      <!-- SVG layout is injected here at runtime (between video and taust) -->
       <div id="taust"></div>
       <button id="shutterHit" aria-label="Take photo"></button>
       <div id="flash"></div>
@@ -139,22 +133,28 @@
   </div>
 </div>
 
+<!-- Background music -->
+<audio id="music" src="Smash Mouth - All Star.mp3" autoplay loop></audio>
+
 <div id="status">Loading…</div>
 
 <script>
 /* ============================================================
-   CONFIG — if auto-detection fails, set the exact element IDs
-   that exist in your Player_Layout.svg here.
+   CONFIG
    ============================================================ */
 const CONFIG = {
   svgFile:   "Player_Layout.svg",
-  videoElementId:  null,   // e.g. "video", "screen", "feed"  (null = auto)
-  buttonElementId: null,   // e.g. "button", "shutter"        (null = auto)
+  videoElementId:  null,
+  buttonElementId: null,
   videoKeywords:  /(video|cam|feed|screen|preview|view|display)/i,
   buttonKeywords: /(button|btn|capture|shutter|photo|snap|trigger|shoot)/i,
-  // If your Taust's screen area is NOT transparent, set this true to
-  // float the video ABOVE the skin instead of showing through it:
-  videoAboveSkin: false,
+
+  // Video tuning ---------------------------------------------------------
+  videoScale:   1.12,   // >1 = bigger (scales around the region's centre)
+  videoOffsetX: 0,      // nudge right (+) / left (-), in % of widget width
+  videoOffsetY: 0,      // nudge down (+) / up (-),   in % of widget height
+
+  musicVolume:  0.6,
 };
 
 const widget      = document.getElementById("widget");
@@ -165,6 +165,7 @@ const shutter     = document.getElementById("shutterHit");
 const flash       = document.getElementById("flash");
 const tray        = document.getElementById("tray");
 const statusEl    = document.getElementById("status");
+const music       = document.getElementById("music");
 
 const setStatus = (msg) => { statusEl.textContent = msg; };
 
@@ -176,7 +177,6 @@ async function loadLayout() {
 
   const doc = new DOMParser().parseFromString(text, "image/svg+xml");
   const svg = doc.documentElement;
-  // Insert SVG above the video but below the Taust skin
   widgetInner.insertBefore(svg, taust);
 
   let vb = svg.viewBox && svg.viewBox.baseVal;
@@ -190,18 +190,15 @@ async function loadLayout() {
   svg.removeAttribute("height");
   svg.setAttribute("preserveAspectRatio", "none");
 
-  // Lock the widget to the SVG aspect ratio so all layers stay aligned
   const aspect = vb.width / vb.height;
   const widthPx = Math.min(vb.width, window.innerWidth * 0.6) || 360;
   widget.style.width = widthPx + "px";
   widgetInner.style.height = (widthPx / aspect) + "px";
 
-  if (CONFIG.videoAboveSkin) camVideo.style.zIndex = 4; // above taust(3)
-
   return { svg, vb };
 }
 
-/* ---------- 2. Find tagged elements in the SVG ---------- */
+/* ---------- 2. Find tagged elements ---------- */
 function findEl(svg, explicitId, keywords) {
   if (explicitId) {
     const el = svg.querySelector("#" + CSS.escape(explicitId));
@@ -218,20 +215,32 @@ function findEl(svg, explicitId, keywords) {
   return null;
 }
 
-/* Position an overlay element over an SVG element, in % of the widget */
-function placeOver(overlay, svgEl, vb) {
+/* Position overlay over an SVG element, with optional scale + offset */
+function placeOver(overlay, svgEl, vb, scale = 1, offX = 0, offY = 0) {
   const b = svgEl.getBBox();
-  overlay.style.left   = ((b.x - vb.x) / vb.width)  * 100 + "%";
-  overlay.style.top    = ((b.y - vb.y) / vb.height) * 100 + "%";
-  overlay.style.width  = (b.width  / vb.width)  * 100 + "%";
-  overlay.style.height = (b.height / vb.height) * 100 + "%";
+  let left = ((b.x - vb.x) / vb.width)  * 100;
+  let top  = ((b.y - vb.y) / vb.height) * 100;
+  let w    = (b.width  / vb.width)  * 100;
+  let h    = (b.height / vb.height) * 100;
+
+  // scale around the centre so it grows symmetrically
+  const cx = left + w / 2, cy = top + h / 2;
+  w *= scale; h *= scale;
+  left = cx - w / 2 + offX;
+  top  = cy - h / 2 + offY;
+
+  overlay.style.left = left + "%";
+  overlay.style.top  = top  + "%";
+  overlay.style.width  = w + "%";
+  overlay.style.height = h + "%";
+
   if (overlay === shutter) {
     overlay.style.borderRadius =
       Math.abs(b.width - b.height) < 4 ? "50%" : "12px";
   }
 }
 
-/* ---------- 3. Start the webcam ---------- */
+/* ---------- 3. Webcam ---------- */
 async function startCamera() {
   if (!navigator.mediaDevices?.getUserMedia) {
     setStatus("Camera API not supported by this browser."); return;
@@ -249,7 +258,18 @@ async function startCamera() {
   }
 }
 
-/* ---------- 4. Take a photo ---------- */
+/* ---------- 4. Music (autoplay with interaction fallback) ---------- */
+function startMusic() {
+  music.volume = CONFIG.musicVolume;
+  music.play().catch(() => {
+    // Browser blocked autoplay — start on the first user gesture
+    const resume = () => { music.play().catch(() => {}); };
+    document.addEventListener("pointerdown", resume, { once: true });
+    document.addEventListener("keydown",     resume, { once: true });
+  });
+}
+
+/* ---------- 5. Take a photo ---------- */
 function takePhoto() {
   if (!camVideo.videoWidth) { setStatus("No camera frame yet."); return; }
 
@@ -274,12 +294,12 @@ function takePhoto() {
   setStatus("Photo captured — click the thumbnail to download.");
 }
 
-/* ---------- 5. Make the widget draggable (without breaking the button) ---------- */
+/* ---------- 6. Dragging ---------- */
 function makeDraggable(el) {
   let startX, startY, originLeft, originTop, dragging = false;
 
   el.addEventListener("pointerdown", (e) => {
-    if (e.target === shutter) return;       // don't drag when grabbing shutter
+    if (e.target === shutter) return;
     dragging = true;
     el.setPointerCapture(e.pointerId);
     const rect = el.getBoundingClientRect();
@@ -287,13 +307,11 @@ function makeDraggable(el) {
     startX = e.clientX; startY = e.clientY;
     el.classList.add("dragging");
   });
-
   el.addEventListener("pointermove", (e) => {
     if (!dragging) return;
     el.style.left = (originLeft + e.clientX - startX) + "px";
     el.style.top  = (originTop  + e.clientY - startY) + "px";
   });
-
   const end = (e) => {
     if (!dragging) return;
     dragging = false;
@@ -304,7 +322,7 @@ function makeDraggable(el) {
   el.addEventListener("pointercancel", end);
 }
 
-/* ---------- 6. Boot ---------- */
+/* ---------- 7. Boot ---------- */
 (async function init() {
   try {
     const { svg, vb } = await loadLayout();
@@ -312,7 +330,8 @@ function makeDraggable(el) {
     const videoEl  = findEl(svg, CONFIG.videoElementId,  CONFIG.videoKeywords);
     const buttonEl = findEl(svg, CONFIG.buttonElementId, CONFIG.buttonKeywords);
 
-    if (videoEl)  placeOver(camVideo, videoEl, vb);
+    if (videoEl)
+      placeOver(camVideo, videoEl, vb, CONFIG.videoScale, CONFIG.videoOffsetX, CONFIG.videoOffsetY);
     else setStatus("⚠ No video area found in SVG — set CONFIG.videoElementId.");
 
     if (buttonEl) placeOver(shutter, buttonEl, vb);
@@ -320,6 +339,7 @@ function makeDraggable(el) {
 
     shutter.addEventListener("click", (e) => { e.stopPropagation(); takePhoto(); });
     makeDraggable(widget);
+    startMusic();
     await startCamera();
   } catch (err) {
     setStatus("Error: " + err.message);
