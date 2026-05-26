@@ -3,139 +3,325 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Oscillating Waves</title>
+<title>Custom Camera Widget</title>
+
 <style>
-    html, body {
-        margin: 0;
-        width: 100%;
-        height: 100%;
-        overflow: hidden;
-        background: #07111f;
-        cursor: crosshair;
-    }
-    canvas {
-        display: block;
-    }
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    font-family: system-ui, sans-serif;
+  }
+
+  /* Full-screen wallpaper background */
+  #stage {
+    position: fixed;
+    inset: 0;
+    background: url("Player_Wallpaper.jpg") center / cover no-repeat;
+  }
+
+  /* The floating, draggable widget */
+  #widget {
+    position: absolute;
+    top: 80px;
+    left: 80px;
+    width: 360px;            /* re-set automatically from the SVG aspect ratio */
+    touch-action: none;       /* needed for smooth pointer dragging */
+    user-select: none;
+    cursor: grab;
+    filter: drop-shadow(0 12px 30px rgba(0,0,0,.45));
+  }
+  #widget.dragging { cursor: grabbing; }
+
+  /* Inner box keeps everything aligned to the same coordinate space */
+  #widgetInner {
+    position: relative;
+    width: 100%;
+    /* Taust.png sits underneath the SVG controls */
+    background: url("Player_Taust.png") center / 100% 100% no-repeat;
+  }
+
+  /* The SVG layout (frame + button graphics) on top of the Taust */
+  #widgetInner svg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;     /* clicks pass through, except our hit-areas */
+  }
+
+  /* Live webcam feed, positioned over the SVG "video" region */
+  #camVideo {
+    position: absolute;
+    object-fit: cover;
+    background: #000;
+    pointer-events: none;     /* so you can still drag by grabbing the screen */
+  }
+
+  /* Transparent clickable shutter, positioned over the SVG "button" region */
+  #shutterHit {
+    position: absolute;
+    cursor: pointer;
+    background: transparent;
+    border: 0;
+    border-radius: 50%;
+    outline: none;
+  }
+  #shutterHit:active { transform: scale(0.94); }
+
+  /* White flash when a photo is taken */
+  #flash {
+    position: absolute;
+    inset: 0;
+    background: #fff;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .12s ease;
+  }
+  #flash.fire { opacity: .9; transition: none; }
+
+  /* Captured-photo tray */
+  #tray {
+    position: absolute;
+    left: 0; right: 0;
+    bottom: -78px;
+    display: flex;
+    gap: 8px;
+    padding: 6px;
+    overflow-x: auto;
+  }
+  #tray a {
+    flex: 0 0 auto;
+    width: 64px; height: 64px;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 2px solid rgba(255,255,255,.85);
+    box-shadow: 0 4px 10px rgba(0,0,0,.4);
+  }
+  #tray img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+  #status {
+    position: fixed;
+    bottom: 12px; left: 12px;
+    color: #fff;
+    background: rgba(0,0,0,.45);
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 13px;
+    pointer-events: none;
+  }
 </style>
 </head>
 <body>
-<canvas id="canvas"></canvas>
+
+<div id="stage">
+  <div id="widget">
+    <div id="widgetInner">
+      <!-- SVG layout is injected here at runtime -->
+      <video id="camVideo" autoplay playsinline muted></video>
+      <button id="shutterHit" aria-label="Take photo"></button>
+      <div id="flash"></div>
+      <div id="tray"></div>
+    </div>
+  </div>
+</div>
+
+<div id="status">Loading…</div>
+
 <script>
-const canvas = document.getElementById("canvas");
-const ctx = canvas.getContext("2d");
-let width, height;
-let mouse = { x: -9999, y: -9999 };
+/* ============================================================
+   CONFIG — if auto-detection fails, set the exact element IDs
+   that exist in your Player_Layout.svg here.
+   ============================================================ */
+const CONFIG = {
+  svgFile:   "Player_Layout.svg",
+  // Leave null to auto-detect, or put the exact id string from the SVG:
+  videoElementId:  null,   // e.g. "video", "screen", "feed"
+  buttonElementId: null,   // e.g. "button", "shutter", "capture"
+  // Keywords used for auto-detection (matched against id / class / label):
+  videoKeywords:  /(video|cam|feed|screen|preview|view|display)/i,
+  buttonKeywords: /(button|btn|capture|shutter|photo|snap|trigger|shoot)/i,
+};
 
-function resize() {
-    width = canvas.width = window.innerWidth;
-    height = canvas.height = window.innerHeight;
-}
-window.addEventListener("resize", resize);
-resize();
+const widget      = document.getElementById("widget");
+const widgetInner = document.getElementById("widgetInner");
+const camVideo    = document.getElementById("camVideo");
+const shutter     = document.getElementById("shutterHit");
+const flash       = document.getElementById("flash");
+const tray        = document.getElementById("tray");
+const statusEl    = document.getElementById("status");
 
-window.addEventListener("mousemove", (e) => {
-    mouse.x = e.clientX;
-    mouse.y = e.clientY;
-});
-window.addEventListener("mouseleave", () => {
-    mouse.x = -9999;
-    mouse.y = -9999;
-});
+const setStatus = (msg) => { statusEl.textContent = msg; };
 
-class WavePoint {
-    constructor(x, baseY, offset) {
-        this.x = x;
-        this.baseY = baseY;
-        this.y = baseY;
-        this.offset = offset;
-        this.vx = 0;
-        this.vy = 0;
-    }
-    update(time) {
-        // Increased wave height (taller crests)
-        const wave = 
-            Math.sin(time * 0.0015 + this.offset) * 42 +
-            Math.sin(time * 0.0008 + this.offset * 0.5) * 28;
+/* ---------- 1. Load the SVG inline so we can read its geometry ---------- */
+async function loadLayout() {
+  const res = await fetch(CONFIG.svgFile);
+  if (!res.ok) throw new Error("Could not load " + CONFIG.svgFile);
+  const text = await res.text();
 
-        let targetY = this.baseY + wave;
+  const doc = new DOMParser().parseFromString(text, "image/svg+xml");
+  const svg = doc.documentElement;
+  widgetInner.insertBefore(svg, camVideo); // put SVG above Taust, below video
 
-        // Stronger mouse explosion
-        const dx = this.x - mouse.x;
-        const dy = this.y - mouse.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        
-        if (dist < 220) {  // bigger radius
-            const angle = Math.atan2(dy, dx);
-            const force = (220 - dist) * 0.22;  // much stronger force
-            this.vx += Math.cos(angle) * force;
-            this.vy += Math.sin(angle) * force;
-        }
+  // Determine the coordinate system + widget aspect ratio
+  let vb = svg.viewBox && svg.viewBox.baseVal;
+  if (!vb || !vb.width) {
+    const w = parseFloat(svg.getAttribute("width")) || 300;
+    const h = parseFloat(svg.getAttribute("height")) || 300;
+    svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+    vb = svg.viewBox.baseVal;
+  }
+  svg.removeAttribute("width");
+  svg.removeAttribute("height");
+  svg.setAttribute("preserveAspectRatio", "none");
 
-        this.vx *= 0.89;
-        this.vy *= 0.89;
-        
-        this.x += this.vx * 0.025;
-        this.y += (targetY - this.y) * 0.085 + this.vy * 0.025;
-    }
+  // Lock the widget to the SVG's aspect ratio (keeps Taust + SVG aligned)
+  const aspect = vb.width / vb.height;
+  const widthPx = Math.min(vb.width, window.innerWidth * 0.6) || 360;
+  widget.style.width = widthPx + "px";
+  widgetInner.style.height = (widthPx / aspect) + "px";
+
+  return { svg, vb };
 }
 
-const waveLayers = [];
-let layerCount = 14;           // Increased from 7 → 14
-const pointsPerWave = 90;      // Slightly more points for smoother waves
-
-function createWaves() {
-    waveLayers.length = 0;
-    for (let l = 0; l < layerCount; l++) {
-        const points = [];
-        // Better vertical distribution
-        const y = height * 0.12 + l * (height * 0.065);
-        for (let i = 0; i <= pointsPerWave; i++) {
-            const x = (i / pointsPerWave) * width;
-            points.push(new WavePoint(x, y, i * 0.42 + l * 0.8));
-        }
-        waveLayers.push(points);
-    }
+/* ---------- 2. Find tagged elements in the SVG ---------- */
+function findEl(svg, explicitId, keywords) {
+  if (explicitId) {
+    const el = svg.querySelector("#" + CSS.escape(explicitId));
+    if (el) return el;
+  }
+  // Search every element for id / class / inkscape:label matching keywords
+  const all = svg.querySelectorAll("*");
+  for (const el of all) {
+    const label =
+      (el.id || "") + " " +
+      (el.getAttribute("class") || "") + " " +
+      (el.getAttribute("inkscape:label") || "") + " " +
+      (el.getAttribute("data-role") || "");
+    if (keywords.test(label)) return el;
+  }
+  return null;
 }
 
-createWaves();
-window.addEventListener("resize", createWaves);
-
-function drawWave(points, opacity) {
-    ctx.beginPath();
-    for (let i = 0; i < points.length; i++) {
-        const p = points[i];
-        if (i === 0) {
-            ctx.moveTo(p.x, p.y);
-        } else {
-            const prev = points[i - 1];
-            const cx = (prev.x + p.x) * 0.5;
-            const cy = (prev.y + p.y) * 0.5;
-            ctx.quadraticCurveTo(prev.x, prev.y, cx, cy);
-        }
-    }
-    ctx.strokeStyle = `rgba(255,255,255,${opacity})`;
-    ctx.lineWidth = 1.6;
-    ctx.stroke();
+/* Position an overlay element over an SVG element, in % of the widget */
+function placeOver(overlay, svgEl, vb) {
+  const b = svgEl.getBBox(); // user units
+  overlay.style.left   = ((b.x - vb.x) / vb.width)  * 100 + "%";
+  overlay.style.top    = ((b.y - vb.y) / vb.height) * 100 + "%";
+  overlay.style.width  = (b.width  / vb.width)  * 100 + "%";
+  overlay.style.height = (b.height / vb.height) * 100 + "%";
+  // Match rounding for a clean circular shutter
+  if (overlay === shutter) {
+    overlay.style.borderRadius =
+      Math.abs(b.width - b.height) < 4 ? "50%" : "12px";
+  } else {
+    overlay.style.borderRadius =
+      getComputedStyle(svgEl).borderRadius || "0";
+  }
 }
 
-function animate(time) {
-    ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = "#07111f";
-    ctx.fillRect(0, 0, width, height);
-
-    for (let i = 0; i < waveLayers.length; i++) {
-        const wave = waveLayers[i];
-        for (const point of wave) {
-            point.update(time + i * 180);
-        }
-        // More visible layers with better opacity gradient
-        drawWave(wave, 0.12 + i * 0.065);
-    }
-
-    requestAnimationFrame(animate);
+/* ---------- 3. Start the webcam ---------- */
+async function startCamera() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    setStatus("Camera API not supported by this browser.");
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "user" }, audio: false
+    });
+    camVideo.srcObject = stream;
+    setStatus("Camera live — drag the widget, click the button to snap.");
+  } catch (err) {
+    setStatus("Camera blocked/denied: " + err.message);
+    camVideo.style.background =
+      "repeating-linear-gradient(45deg,#222,#222 10px,#333 10px,#333 20px)";
+  }
 }
 
-animate(0);
+/* ---------- 4. Take a photo ---------- */
+function takePhoto() {
+  if (!camVideo.videoWidth) { setStatus("No camera frame yet."); return; }
+
+  const canvas = document.createElement("canvas");
+  canvas.width  = camVideo.videoWidth;
+  canvas.height = camVideo.videoHeight;
+  canvas.getContext("2d").drawImage(camVideo, 0, 0);
+
+  const dataUrl = canvas.toDataURL("image/png");
+
+  // Flash effect
+  flash.classList.add("fire");
+  requestAnimationFrame(() => requestAnimationFrame(() => flash.classList.remove("fire")));
+
+  // Add a downloadable thumbnail to the tray
+  const link = document.createElement("a");
+  link.href = dataUrl;
+  link.download = "photo_" + Date.now() + ".png";
+  link.title = "Click to download";
+  const thumb = document.createElement("img");
+  thumb.src = dataUrl;
+  link.appendChild(thumb);
+  tray.prepend(link);
+
+  setStatus("Photo captured — click the thumbnail to download.");
+}
+
+/* ---------- 5. Make the widget draggable (without breaking the button) ---------- */
+function makeDraggable(el) {
+  let startX, startY, originLeft, originTop, dragging = false, moved = false;
+
+  el.addEventListener("pointerdown", (e) => {
+    // Don't start a drag when grabbing the shutter button
+    if (e.target === shutter) return;
+    dragging = true; moved = false;
+    el.setPointerCapture(e.pointerId);
+    const rect = el.getBoundingClientRect();
+    originLeft = rect.left; originTop = rect.top;
+    startX = e.clientX; startY = e.clientY;
+    el.classList.add("dragging");
+  });
+
+  el.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    const dx = e.clientX - startX, dy = e.clientY - startY;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) moved = true;
+    el.style.left = (originLeft + dx) + "px";
+    el.style.top  = (originTop  + dy) + "px";
+  });
+
+  const end = (e) => {
+    if (!dragging) return;
+    dragging = false;
+    el.classList.remove("dragging");
+    try { el.releasePointerCapture(e.pointerId); } catch (_) {}
+  };
+  el.addEventListener("pointerup", end);
+  el.addEventListener("pointercancel", end);
+}
+
+/* ---------- 6. Boot everything ---------- */
+(async function init() {
+  try {
+    const { svg, vb } = await loadLayout();
+
+    const videoEl  = findEl(svg, CONFIG.videoElementId,  CONFIG.videoKeywords);
+    const buttonEl = findEl(svg, CONFIG.buttonElementId, CONFIG.buttonKeywords);
+
+    if (videoEl)  placeOver(camVideo, videoEl, vb);
+    else setStatus("⚠ No video area found in SVG — set CONFIG.videoElementId.");
+
+    if (buttonEl) placeOver(shutter, buttonEl, vb);
+    else setStatus("⚠ No button area found in SVG — set CONFIG.buttonElementId.");
+
+    shutter.addEventListener("click", (e) => { e.stopPropagation(); takePhoto(); });
+    makeDraggable(widget);
+    await startCamera();
+  } catch (err) {
+    setStatus("Error: " + err.message);
+    console.error(err);
+  }
+})();
 </script>
 </body>
 </html>
