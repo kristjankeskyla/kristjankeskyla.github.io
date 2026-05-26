@@ -33,49 +33,60 @@
   }
   #widget.dragging { cursor: grabbing; }
 
-  /* Inner box keeps everything aligned to the same coordinate space */
+  /* Inner box keeps every layer aligned to the same coordinate space */
   #widgetInner {
     position: relative;
     width: 100%;
-    /* Taust.png sits underneath the SVG controls */
-    background: url("Player_Taust.png") center / 100% 100% no-repeat;
   }
 
-  /* The SVG layout (frame + button graphics) on top of the Taust */
+  /* LAYER 1 — live webcam feed, sits UNDER the skin and shows through it */
+  #camVideo {
+    position: absolute;
+    object-fit: cover;
+    background: #000;
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  /* LAYER 2 — the SVG: invisible, used only to locate the regions */
   #widgetInner svg {
     position: absolute;
     inset: 0;
     width: 100%;
     height: 100%;
-    pointer-events: none;     /* clicks pass through, except our hit-areas */
+    opacity: 0;               /* shapes transparent — Taust shows on top */
+    pointer-events: none;
+    z-index: 2;
   }
 
-  /* Live webcam feed, positioned over the SVG "video" region */
-  #camVideo {
+  /* LAYER 3 — Player_Taust.png skin displayed ON TOP */
+  #taust {
     position: absolute;
-    object-fit: cover;
-    background: #000;
-    pointer-events: none;     /* so you can still drag by grabbing the screen */
+    inset: 0;
+    background: url("Player_Taust.png") center / 100% 100% no-repeat;
+    pointer-events: none;     /* lets drags/clicks pass through to the widget */
+    z-index: 3;
   }
 
-  /* Transparent clickable shutter, positioned over the SVG "button" region */
+  /* LAYER 5 — transparent clickable shutter over the SVG "button" region */
   #shutterHit {
     position: absolute;
     cursor: pointer;
     background: transparent;
     border: 0;
-    border-radius: 50%;
     outline: none;
+    z-index: 5;
   }
   #shutterHit:active { transform: scale(0.94); }
 
-  /* White flash when a photo is taken */
+  /* LAYER 6 — white flash on capture */
   #flash {
     position: absolute;
     inset: 0;
     background: #fff;
     opacity: 0;
     pointer-events: none;
+    z-index: 6;
     transition: opacity .12s ease;
   }
   #flash.fire { opacity: .9; transition: none; }
@@ -89,6 +100,7 @@
     gap: 8px;
     padding: 6px;
     overflow-x: auto;
+    z-index: 7;
   }
   #tray a {
     flex: 0 0 auto;
@@ -117,8 +129,9 @@
 <div id="stage">
   <div id="widget">
     <div id="widgetInner">
-      <!-- SVG layout is injected here at runtime -->
       <video id="camVideo" autoplay playsinline muted></video>
+      <!-- SVG layout is injected here at runtime (between video and taust) -->
+      <div id="taust"></div>
       <button id="shutterHit" aria-label="Take photo"></button>
       <div id="flash"></div>
       <div id="tray"></div>
@@ -135,17 +148,19 @@
    ============================================================ */
 const CONFIG = {
   svgFile:   "Player_Layout.svg",
-  // Leave null to auto-detect, or put the exact id string from the SVG:
-  videoElementId:  null,   // e.g. "video", "screen", "feed"
-  buttonElementId: null,   // e.g. "button", "shutter", "capture"
-  // Keywords used for auto-detection (matched against id / class / label):
+  videoElementId:  null,   // e.g. "video", "screen", "feed"  (null = auto)
+  buttonElementId: null,   // e.g. "button", "shutter"        (null = auto)
   videoKeywords:  /(video|cam|feed|screen|preview|view|display)/i,
   buttonKeywords: /(button|btn|capture|shutter|photo|snap|trigger|shoot)/i,
+  // If your Taust's screen area is NOT transparent, set this true to
+  // float the video ABOVE the skin instead of showing through it:
+  videoAboveSkin: false,
 };
 
 const widget      = document.getElementById("widget");
 const widgetInner = document.getElementById("widgetInner");
 const camVideo    = document.getElementById("camVideo");
+const taust       = document.getElementById("taust");
 const shutter     = document.getElementById("shutterHit");
 const flash       = document.getElementById("flash");
 const tray        = document.getElementById("tray");
@@ -161,9 +176,9 @@ async function loadLayout() {
 
   const doc = new DOMParser().parseFromString(text, "image/svg+xml");
   const svg = doc.documentElement;
-  widgetInner.insertBefore(svg, camVideo); // put SVG above Taust, below video
+  // Insert SVG above the video but below the Taust skin
+  widgetInner.insertBefore(svg, taust);
 
-  // Determine the coordinate system + widget aspect ratio
   let vb = svg.viewBox && svg.viewBox.baseVal;
   if (!vb || !vb.width) {
     const w = parseFloat(svg.getAttribute("width")) || 300;
@@ -175,11 +190,13 @@ async function loadLayout() {
   svg.removeAttribute("height");
   svg.setAttribute("preserveAspectRatio", "none");
 
-  // Lock the widget to the SVG's aspect ratio (keeps Taust + SVG aligned)
+  // Lock the widget to the SVG aspect ratio so all layers stay aligned
   const aspect = vb.width / vb.height;
   const widthPx = Math.min(vb.width, window.innerWidth * 0.6) || 360;
   widget.style.width = widthPx + "px";
   widgetInner.style.height = (widthPx / aspect) + "px";
+
+  if (CONFIG.videoAboveSkin) camVideo.style.zIndex = 4; // above taust(3)
 
   return { svg, vb };
 }
@@ -190,9 +207,7 @@ function findEl(svg, explicitId, keywords) {
     const el = svg.querySelector("#" + CSS.escape(explicitId));
     if (el) return el;
   }
-  // Search every element for id / class / inkscape:label matching keywords
-  const all = svg.querySelectorAll("*");
-  for (const el of all) {
+  for (const el of svg.querySelectorAll("*")) {
     const label =
       (el.id || "") + " " +
       (el.getAttribute("class") || "") + " " +
@@ -205,26 +220,21 @@ function findEl(svg, explicitId, keywords) {
 
 /* Position an overlay element over an SVG element, in % of the widget */
 function placeOver(overlay, svgEl, vb) {
-  const b = svgEl.getBBox(); // user units
+  const b = svgEl.getBBox();
   overlay.style.left   = ((b.x - vb.x) / vb.width)  * 100 + "%";
   overlay.style.top    = ((b.y - vb.y) / vb.height) * 100 + "%";
   overlay.style.width  = (b.width  / vb.width)  * 100 + "%";
   overlay.style.height = (b.height / vb.height) * 100 + "%";
-  // Match rounding for a clean circular shutter
   if (overlay === shutter) {
     overlay.style.borderRadius =
       Math.abs(b.width - b.height) < 4 ? "50%" : "12px";
-  } else {
-    overlay.style.borderRadius =
-      getComputedStyle(svgEl).borderRadius || "0";
   }
 }
 
 /* ---------- 3. Start the webcam ---------- */
 async function startCamera() {
   if (!navigator.mediaDevices?.getUserMedia) {
-    setStatus("Camera API not supported by this browser.");
-    return;
+    setStatus("Camera API not supported by this browser."); return;
   }
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
@@ -247,14 +257,11 @@ function takePhoto() {
   canvas.width  = camVideo.videoWidth;
   canvas.height = camVideo.videoHeight;
   canvas.getContext("2d").drawImage(camVideo, 0, 0);
-
   const dataUrl = canvas.toDataURL("image/png");
 
-  // Flash effect
   flash.classList.add("fire");
   requestAnimationFrame(() => requestAnimationFrame(() => flash.classList.remove("fire")));
 
-  // Add a downloadable thumbnail to the tray
   const link = document.createElement("a");
   link.href = dataUrl;
   link.download = "photo_" + Date.now() + ".png";
@@ -269,12 +276,11 @@ function takePhoto() {
 
 /* ---------- 5. Make the widget draggable (without breaking the button) ---------- */
 function makeDraggable(el) {
-  let startX, startY, originLeft, originTop, dragging = false, moved = false;
+  let startX, startY, originLeft, originTop, dragging = false;
 
   el.addEventListener("pointerdown", (e) => {
-    // Don't start a drag when grabbing the shutter button
-    if (e.target === shutter) return;
-    dragging = true; moved = false;
+    if (e.target === shutter) return;       // don't drag when grabbing shutter
+    dragging = true;
     el.setPointerCapture(e.pointerId);
     const rect = el.getBoundingClientRect();
     originLeft = rect.left; originTop = rect.top;
@@ -284,10 +290,8 @@ function makeDraggable(el) {
 
   el.addEventListener("pointermove", (e) => {
     if (!dragging) return;
-    const dx = e.clientX - startX, dy = e.clientY - startY;
-    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) moved = true;
-    el.style.left = (originLeft + dx) + "px";
-    el.style.top  = (originTop  + dy) + "px";
+    el.style.left = (originLeft + e.clientX - startX) + "px";
+    el.style.top  = (originTop  + e.clientY - startY) + "px";
   });
 
   const end = (e) => {
@@ -300,7 +304,7 @@ function makeDraggable(el) {
   el.addEventListener("pointercancel", end);
 }
 
-/* ---------- 6. Boot everything ---------- */
+/* ---------- 6. Boot ---------- */
 (async function init() {
   try {
     const { svg, vb } = await loadLayout();
