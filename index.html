@@ -1,351 +1,357 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Custom Camera Widget</title>
-
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kooli Player</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,500&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
-  html, body {
-    margin: 0;
-    height: 100%;
-    overflow: hidden;
-    font-family: system-ui, sans-serif;
+  :root{
+    --ink:#27343c;
+    --coral:#ff6b4a;
+    --sky:#61caf1;
+    --cream:#fdf6e9;
   }
+  *{box-sizing:border-box;}
+  html,body{height:100%;margin:0;}
+  body{
+    font-family:'Fraunces',serif;
+    background:
+      radial-gradient(120% 120% at 78% 18%, rgba(97,202,241,.18), transparent 55%),
+      radial-gradient(120% 120% at 12% 92%, rgba(255,107,74,.16), transparent 50%),
+      linear-gradient(160deg,#10303a 0%,#0a1f27 55%,#06151b 100%);
+    color:var(--cream);
+    min-height:100%;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:18px;padding:32px 18px;overflow:hidden;
+  }
+  .head{text-align:center;line-height:1;}
+  .kicker{
+    font-family:'DM Mono',monospace;font-size:12px;letter-spacing:.42em;
+    text-transform:uppercase;color:var(--sky);opacity:.85;margin:0 0 10px;
+    padding-left:.42em;
+  }
+  h1{
+    font-weight:600;font-size:clamp(34px,6vw,58px);margin:0;
+    font-style:italic;letter-spacing:-.01em;
+    text-shadow:0 2px 0 rgba(0,0,0,.25);
+  }
+  .stage{
+    width:min(640px,94vw);
+    filter:drop-shadow(0 28px 50px rgba(0,0,0,.45));
+    will-change:transform;
+    touch-action:none;          /* let pointer-drag work on touch */
+  }
+  .stage.dragging{filter:drop-shadow(0 40px 70px rgba(0,0,0,.6));}
+  svg{width:100%;height:auto;display:block;overflow:visible;cursor:grab;}
+  .stage.dragging svg{cursor:grabbing;}
 
-  #stage {
-    position: fixed;
-    inset: 0;
-    background: url("Player_Wallpaper.jpg") center / cover no-repeat;
+  /* ---- interaction states on tagged button groups ---- */
+  .btn{cursor:pointer;}
+  .btn .area{filter:url(#bevel);transition:filter .15s ease;}
+  .btn:hover .area{filter:url(#bevel) brightness(1.05) saturate(1.05);}
+  .btn .lift{
+    transition:transform .12s cubic-bezier(.34,1.56,.64,1);
+    transform-box:fill-box;transform-origin:center;
   }
+  .btn:active .lift{transform:translateY(2.5px) scale(.97);}
+  .glyph{filter:url(#symbolShadow);pointer-events:none;}
 
-  #widget {
-    position: absolute;
-    top: 80px;
-    left: 80px;
-    width: 360px;
-    touch-action: none;
-    user-select: none;
-    cursor: grab;
-    filter: drop-shadow(0 12px 30px rgba(0,0,0,.45));
-  }
-  #widget.dragging { cursor: grabbing; }
+  #songClip{cursor:pointer;}
+  #barHit{cursor:pointer;}
+  text{user-select:none;}
 
-  #widgetInner {
-    position: relative;
-    width: 100%;
+  .foot{
+    font-family:'DM Mono',monospace;font-size:12px;letter-spacing:.04em;
+    color:rgba(253,246,233,.55);text-align:center;max-width:560px;line-height:1.7;
   }
-
-  /* Webcam feed — z-index set in JS so it stays ABOVE the skin */
-  #camVideo {
-    position: absolute;
-    object-fit: cover;
-    background: #000;
-    pointer-events: none;     /* clicks pass through to the shutter beneath */
-    z-index: 4;
-  }
-
-  /* SVG: invisible, used only to locate the regions */
-  #widgetInner svg {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    opacity: 0;
-    pointer-events: none;
-    z-index: 2;
-  }
-
-  /* Player_Taust.png skin */
-  #taust {
-    position: absolute;
-    inset: 0;
-    background: url("Player_Taust.png") center / 100% 100% no-repeat;
-    pointer-events: none;
-    z-index: 3;
-  }
-
-  /* Transparent clickable shutter over the SVG "button" region */
-  #shutterHit {
-    position: absolute;
-    cursor: pointer;
-    background: transparent;
-    border: 0;
-    outline: none;
-    z-index: 5;
-  }
-  #shutterHit:active { transform: scale(0.94); }
-
-  #flash {
-    position: absolute;
-    inset: 0;
-    background: #fff;
-    opacity: 0;
-    pointer-events: none;
-    z-index: 6;
-    transition: opacity .12s ease;
-  }
-  #flash.fire { opacity: .9; transition: none; }
-
-  #tray {
-    position: absolute;
-    left: 0; right: 0;
-    bottom: -78px;
-    display: flex;
-    gap: 8px;
-    padding: 6px;
-    overflow-x: auto;
-    z-index: 7;
-  }
-  #tray a {
-    flex: 0 0 auto;
-    width: 64px; height: 64px;
-    border-radius: 8px;
-    overflow: hidden;
-    border: 2px solid rgba(255,255,255,.85);
-    box-shadow: 0 4px 10px rgba(0,0,0,.4);
-  }
-  #tray img { width: 100%; height: 100%; object-fit: cover; display: block; }
-
-  #status {
-    position: fixed;
-    bottom: 12px; left: 12px;
-    color: #fff;
-    background: rgba(0,0,0,.45);
-    padding: 6px 10px;
-    border-radius: 6px;
-    font-size: 13px;
-    pointer-events: none;
-  }
+  .foot b{color:var(--sky);font-weight:500;}
 </style>
 </head>
 <body>
 
-<div id="stage">
-  <div id="widget">
-    <div id="widgetInner">
-      <video id="camVideo" autoplay playsinline muted></video>
-      <div id="taust"></div>
-      <button id="shutterHit" aria-label="Take photo"></button>
-      <div id="flash"></div>
-      <div id="tray"></div>
-    </div>
+  <div class="head">
+    <p class="kicker">Now Playing</p>
+    <h1>Kooli&nbsp;Player</h1>
   </div>
-</div>
 
-<!-- Background music -->
-<audio id="music" src="Smash Mouth - All Star.mp3" autoplay loop></audio>
+  <div class="stage" id="stage">
+    <!-- ================= TAGGED SVG ================= -->
+    <svg id="player" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 671.8 500" aria-label="Music player">
+      <defs>
+        <linearGradient id="bodyGrad" x1="120" y1="40" x2="560" y2="470" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stop-color="#fffaf1"/><stop offset=".45" stop-color="#f3e6cd"/><stop offset="1" stop-color="#ddc59f"/>
+        </linearGradient>
+        <linearGradient id="btnGrad" x1="0" y1="330" x2="0" y2="480" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stop-color="#fffaf0"/><stop offset="1" stop-color="#e7d2ac"/>
+        </linearGradient>
+        <linearGradient id="playGrad" x1="0" y1="330" x2="0" y2="480" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stop-color="#ffe6dc"/><stop offset="1" stop-color="#ffb59c"/>
+        </linearGradient>
+        <linearGradient id="screenGrad" x1="280" y1="60" x2="560" y2="300" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stop-color="#ece0c8"/><stop offset="1" stop-color="#d8c4a0"/>
+        </linearGradient>
+        <linearGradient id="trackGrad" x1="0" y1="337" x2="0" y2="348" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stop-color="#d4bf99"/><stop offset="1" stop-color="#ecdcbd"/>
+        </linearGradient>
+        <linearGradient id="fillGrad" x1="158" y1="0" x2="519" y2="0" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stop-color="#ff8a5b"/><stop offset="1" stop-color="#ff4d6d"/>
+        </linearGradient>
+        <linearGradient id="inkGrad" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#3a4a54"/><stop offset="1" stop-color="#1d272d"/>
+        </linearGradient>
+        <linearGradient id="inkCoral" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#ff7a52"/><stop offset="1" stop-color="#e23c52"/>
+        </linearGradient>
 
-<div id="status">Loading…</div>
+        <!-- RAISED bevel -->
+        <filter id="bevel" x="-40%" y="-40%" width="180%" height="180%" color-interpolation-filters="sRGB">
+          <feGaussianBlur in="SourceAlpha" stdDeviation="3" result="sb"/>
+          <feOffset in="sb" dx="0" dy="3.5" result="so"/>
+          <feComponentTransfer in="so" result="shadow"><feFuncA type="linear" slope="0.38"/></feComponentTransfer>
+          <feGaussianBlur in="SourceAlpha" stdDeviation="2.4" result="lb"/>
+          <feSpecularLighting in="lb" surfaceScale="4.5" specularConstant="0.9" specularExponent="15" lighting-color="#ffffff" result="spec">
+            <feDistantLight azimuth="228" elevation="58"/>
+          </feSpecularLighting>
+          <feComposite in="spec" in2="SourceAlpha" operator="in" result="specClip"/>
+          <feMerge><feMergeNode in="shadow"/><feMergeNode in="SourceGraphic"/><feMergeNode in="specClip"/></feMerge>
+        </filter>
+
+        <!-- INSET / recessed -->
+        <filter id="inset" x="-30%" y="-30%" width="160%" height="160%" color-interpolation-filters="sRGB">
+          <feComponentTransfer in="SourceAlpha" result="inv"><feFuncA type="table" tableValues="1 0"/></feComponentTransfer>
+          <feGaussianBlur in="inv" stdDeviation="3.5" result="ib"/>
+          <feOffset in="ib" dx="0" dy="2.5" result="io"/>
+          <feComposite in="io" in2="SourceAlpha" operator="in" result="ic"/>
+          <feComponentTransfer in="ic" result="ish"><feFuncA type="linear" slope="0.6"/></feComponentTransfer>
+          <feMerge><feMergeNode in="SourceGraphic"/><feMergeNode in="ish"/></feMerge>
+        </filter>
+
+        <filter id="symbolShadow" x="-50%" y="-50%" width="200%" height="200%" color-interpolation-filters="sRGB">
+          <feDropShadow dx="0" dy="1.2" stdDeviation="0.6" flood-color="#fff" flood-opacity="0.5"/>
+          <feDropShadow dx="0" dy="-0.6" stdDeviation="0.8" flood-color="#000" flood-opacity="0.3"/>
+        </filter>
+
+        <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+          <feGaussianBlur stdDeviation="2.4" result="b"/>
+          <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
+
+        <clipPath id="songClipPath">
+          <path d="M524.9,58.2c-55.9-26.9-108.5-12.4-153.5,0-19,5.2-114.3,31.4-114.2,68.4,0,14.9,15.5,21.8,116,78.9,72,40.9,101.9,58.9,135.1,88.6,35,31.4,35,53.2,50,52.6,35.8-1.3,85.6-112.8,49.1-201.7-23.7-57.6-74.2-82.9-82.4-86.8h0Z"/>
+        </clipPath>
+        <clipPath id="barClipPath">
+          <path d="M163.6,337.7h349.9c2.9,0,5.3,2.4,5.3,5.2h0c0,2.9-2.4,5.2-5.3,5.2H163.6c-2.9,0-5.3-2.4-5.3-5.2h0c0-2.9,2.4-5.2,5.3-5.2Z"/>
+        </clipPath>
+      </defs>
+
+      <!-- <Background> : main player body (drag handle) -->
+      <path id="Background" d="M147.2,25.5c-22.5-1.5-34.2,18.6-65.9,45-39.6,32.9-50.7,26-65.9,49.9-3.1,4.9-20.2,31.8-14.1,62.6,5.6,28.1,24,27.2,34.7,56.6,10.1,27.5,3.4,54.4-6.7,95.2-5.2,21.2-16,55.4-16.6,57.2-9.9,31.1-12.4,34.7-11.4,41.9,4.3,34.2,72,52.5,91.3,57.5,37.8,9.8,73.8,12.8,231.7,0,107.6-8.8,113-12,143.8-8.3,21.9,2.6,46.6,3.3,95.9,4.7,25.5.7,48.8.9,65.2-14.6,4.1-3.8,6.9-7.9,16-28.6,17.4-39.9,26.1-59.9,26.6-75.9,1-29.1-14.5-27.7-22.6-66.6-6.4-30.9,2.6-35.1,4-107.8.7-34.8-1.5-31.2,0-53.9,3.1-47.3,12.1-60.5,4.7-77.9-10-23.3-40.1-31.7-63.2-37C500.7,3.9,432-11.9,338.9,11.9c-51.4,13.2-132.4,44.1-171.7,20.6-3-1.8-10-6.4-20-7.1h0Z"
+            fill="url(#bodyGrad)" filter="url(#bevel)"/>
+
+      <!-- <Background>1 : decorative blue accent line -->
+      <path id="Background_accent" fill="none" stroke="var(--sky)" stroke-width="1.4" stroke-miterlimit="10" opacity=".9" filter="url(#glow)"
+            d="M402.1,278.4c-3.2,13.3-60.1,11.7-82.3,10.2-36.1-2.5-42.5-9.6-91-18.5-40.4-7.4-74.8-13.4-117.2-5.5-22.7,4.2-54.1,10.5-69.8,35.1-.9,1.5-4.8,12.7-12.4,35.1-13.1,38.4-15.4,45.8-16.6,57.2-1.2,10.8-2.7,24.8,1.3,37.9,10.2,33.1,51.9,47.4,67.1,52.7,105,36.1,244-20.3,279.4-35.1,75.4-31.5,120.2-65,151.5-44,24.3,16.3,19.7,51.4,49.9,62.4,20.8,7.6,48.6.3,58.2-15.7,4.2-7,2.7-12,0-40.2-5.3-55.8-2.2-66.6,0-72.4,7.5-20,17.6-15.3,29-35.5,13.1-23.4,3.8-37.1,4-107.8,0-36.4,2.5-36.9,0-53.9-2.4-16.1-7.8-49.4-33-75.4-12.3-12.7-25.9-20.1-39.7-25.9-137-57.3-241.8-18.5-241.8-18.5-48.5,18-144.5,69.4-139.2,123.8,7.5,76.2,208.8,108.6,202.7,134h-.1Z"/>
+
+      <!-- <Song name Clip Area> : recessed display screen / load + title -->
+      <g id="songClip" role="button" aria-label="Load a track">
+        <path id="SongNameClipArea" d="M524.9,58.2c-55.9-26.9-108.5-12.4-153.5,0-19,5.2-114.3,31.4-114.2,68.4,0,14.9,15.5,21.8,116,78.9,72,40.9,101.9,58.9,135.1,88.6,35,31.4,35,53.2,50,52.6,35.8-1.3,85.6-112.8,49.1-201.7-23.7-57.6-74.2-82.9-82.4-86.8h0Z"
+              fill="url(#screenGrad)" filter="url(#inset)"/>
+        <g clip-path="url(#songClipPath)">
+          <text id="nowPlayingTag" x="300" y="120" font-family="'DM Mono',monospace" font-size="13" letter-spacing="4" fill="var(--coral)">SMASH MOUTH</text>
+          <g id="titleScroll">
+            <text id="songTitle" x="300" y="172" font-family="'Fraunces',serif" font-style="italic" font-weight="600" font-size="40" fill="var(--ink)">All Star</text>
+          </g>
+          <text id="loadHint" x="300" y="212" font-family="'DM Mono',monospace" font-size="12" letter-spacing="1" fill="rgba(39,52,60,.5)">tap to load your own audio</text>
+        </g>
+      </g>
+
+      <!-- progress track + fill + knob + hit zone + time -->
+      <path id="ProgressTrack" d="M163.6,337.7h349.9c2.9,0,5.3,2.4,5.3,5.2h0c0,2.9-2.4,5.2-5.3,5.2H163.6c-2.9,0-5.3-2.4-5.3-5.2h0c0-2.9,2.4-5.2,5.3-5.2Z"
+            fill="url(#trackGrad)" filter="url(#inset)"/>
+      <rect id="barFill" x="158.3" y="337.2" width="0" height="11.4" fill="url(#fillGrad)" clip-path="url(#barClipPath)"/>
+      <circle id="barKnob" cx="158.3" cy="342.9" r="0" fill="#fff" stroke="var(--coral)" stroke-width="2.5"/>
+      <rect id="barHit" x="150" y="330" width="376" height="26" fill="transparent"/>
+      <text id="timeReadout" x="338" y="368" text-anchor="middle" font-family="'DM Mono',monospace" font-size="13" letter-spacing="1" fill="rgba(39,52,60,.7)">0:00 / 0:00</text>
+
+      <!-- ============ TRANSPORT BUTTONS (tagged areas + symbols) ============ -->
+
+      <!-- <Play Button Area> + <Play Button Chevron> => Play / Pause -->
+      <g class="btn" id="btnPlay" role="button" aria-label="Play / pause">
+        <g class="lift">
+          <path class="area" d="M85.9,339.3c-4.2,4.7-11.7,14.1-16.6,29.9-3.3,10.7-10.4,33.5,0,58.8s31.6,36.5,36.1,38.7c27.7,14,54.5,5.6,72.1,0,16.6-5.2,42.5-16.9,41.1-26.3-1.1-7.3-17.5-5-41-19.7-6.8-4.2-20.6-13-31.6-29-9.9-14.4-17.3-34.1-22-46.5-4.9-13.1-6.4-19.6-12-21.3-9.5-3-21.5,10.3-26.1,15.3h0Z"
+                fill="url(#playGrad)"/>
+          <polygon id="glyphPlay" class="glyph" points="128.5 411.2 103.1 396.6 103.1 425.9 128.5 411.2" fill="url(#inkCoral)"/>
+          <g id="glyphPause" class="glyph" style="display:none" fill="url(#inkCoral)">
+            <rect x="104" y="397.5" width="7.5" height="28" rx="2"/>
+            <rect x="117" y="397.5" width="7.5" height="28" rx="2"/>
+          </g>
+        </g>
+      </g>
+
+      <!-- <Stop Button Area> + <Stop Button Rectangle> => Stop / reset -->
+      <g class="btn" id="btnStop" role="button" aria-label="Stop">
+        <g class="lift">
+          <path class="area" d="M250,394.2c-16-13.2-42-16.7-48.7-7.3-4.2,5.9,0,15.5,1.3,18.5,11.8,27.2,55.3,39.9,64.4,29.4,6.5-7.6-3.1-29.1-17-40.6Z"
+                fill="url(#btnGrad)"/>
+          <rect id="StopButtonRectangle" class="glyph" x="228.8" y="403.5" width="13.9" height="13.9" rx="2" fill="url(#inkGrad)"/>
+        </g>
+      </g>
+
+      <!-- <Forward Button Area> + <Forward button symbol> => Skip forward -->
+      <g class="btn" id="btnForward" role="button" aria-label="Skip forward">
+        <g class="lift">
+          <path class="area" d="M274.8,394.5c-.4,3.6,6.8,4.3,9.8,12.3,2,5.3,1.5,12.2,1.3,14.8-.3,4.4-1.1,7,.5,10,1.5,2.6,3.9,3.8,5.4,4.4,2.3,1,6,2.2,18.6,0,6.1-1,11.1-1.9,17.7-4.4,7-2.7,10.5-4,13.3-7.2,5.1-6,4.5-14.2,4.1-17.6.4-2.3.9-7.5-2-12.3-3.2-5.4-8.8-7.1-13.7-8.5-4.1-1.2-11.3-2.6-28.8,0-12.8,1.9-25.6,3.9-26.2,8.5h0Z"
+                fill="url(#btnGrad)"/>
+          <polygon id="ForwardButtonSymbol" class="glyph" points="318.8 403.1 318.8 410.6 305.9 403.1 305.9 418.6 318.8 411.2 318.8 418.6 319.8 418.6 319.8 403.1 318.8 403.1" fill="url(#inkGrad)"/>
+        </g>
+      </g>
+    </svg>
+    <!-- =============================================== -->
+  </div>
+
+  <p class="foot">
+    Drag the player by its body. <b>Play / Pause</b> · <b>Stop</b> · <b>Skip +15s</b>.<br>
+    Put <b>Smash Mouth - All Star.mp3</b> next to this file — or tap the display to load any track.
+  </p>
+
+  <!-- the song plays from a LOCAL copy you place beside index.html -->
+  <audio id="audio" src="Smash Mouth - All Star.mp3" preload="metadata"></audio>
 
 <script>
-/* ============================================================
-   CONFIG
-   ============================================================ */
-const CONFIG = {
-  svgFile:   "Player_Layout.svg",
-  videoElementId:  null,
-  buttonElementId: null,
-  videoKeywords:  /(video|cam|feed|screen|preview|view|display)/i,
-  buttonKeywords: /(button|btn|capture|shutter|photo|snap|trigger|shoot)/i,
+"use strict";
 
-  // Video tuning ---------------------------------------------------------
-  videoScale:   1.12,   // >1 = bigger (scales around the region's centre)
-  videoOffsetX: 0,      // nudge right (+) / left (-), in % of widget width
-  videoOffsetY: 0,      // nudge down (+) / up (-),   in % of widget height
+/* ------------------------------------------------------------------
+   LAYER  ->  FUNCTION  MAP  (decoded from the Illustrator layer IDs)
+   <Play Button Area>    + <Play Button Chevron>    -> toggle()  Play / Pause
+   <Stop Button Area>    + <Stop Button Rectangle>  -> stop()    reset to 0:00
+   <Forward Button Area> + <Forward button symbol>  -> skip()    +15 seconds
+   <Song name Clip Area>                            -> loadFile() + title screen
+   progress pill (unnamed)                          -> seek() / progress
+   <Background> / <Background>1                      -> body (drag handle) + accent
+------------------------------------------------------------------- */
 
-  musicVolume:  0.6,
+const $ = id => document.getElementById(id);
+const fmt = s => { s = Math.max(0, Math.floor(isFinite(s) ? s : 0)); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); };
+
+const audio = $('audio');
+
+/* ---------- transport functions wired to the tagged layers ---------- */
+const Player = {
+  toggle(){ audio.paused ? this.play() : audio.pause(); },
+  play(){ const p = audio.play(); if(p) p.catch(()=>flagMissing()); },
+  stop(){ audio.pause(); audio.currentTime = 0; },
+  skip(){
+    if(isFinite(audio.duration)){
+      audio.currentTime = audio.currentTime + 15 >= audio.duration ? 0 : audio.currentTime + 15;
+    }
+  },
+  seek(frac){
+    if(isFinite(audio.duration)) audio.currentTime = Math.max(0, Math.min(1, frac)) * audio.duration;
+  },
+  loadFile(url, name){
+    audio.src = url;
+    setLabels(name, 'NOW PLAYING');
+    const p = audio.play(); if(p) p.catch(()=>{});
+  }
 };
 
-const widget      = document.getElementById("widget");
-const widgetInner = document.getElementById("widgetInner");
-const camVideo    = document.getElementById("camVideo");
-const taust       = document.getElementById("taust");
-const shutter     = document.getElementById("shutterHit");
-const flash       = document.getElementById("flash");
-const tray        = document.getElementById("tray");
-const statusEl    = document.getElementById("status");
-const music       = document.getElementById("music");
+$('btnPlay').addEventListener('click',    ()=>Player.toggle());
+$('btnStop').addEventListener('click',    ()=>Player.stop());
+$('btnForward').addEventListener('click', ()=>Player.skip());
 
-const setStatus = (msg) => { statusEl.textContent = msg; };
-
-/* ---------- 1. Load the SVG inline so we can read its geometry ---------- */
-async function loadLayout() {
-  const res = await fetch(CONFIG.svgFile);
-  if (!res.ok) throw new Error("Could not load " + CONFIG.svgFile);
-  const text = await res.text();
-
-  const doc = new DOMParser().parseFromString(text, "image/svg+xml");
-  const svg = doc.documentElement;
-  widgetInner.insertBefore(svg, taust);
-
-  let vb = svg.viewBox && svg.viewBox.baseVal;
-  if (!vb || !vb.width) {
-    const w = parseFloat(svg.getAttribute("width")) || 300;
-    const h = parseFloat(svg.getAttribute("height")) || 300;
-    svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
-    vb = svg.viewBox.baseVal;
-  }
-  svg.removeAttribute("width");
-  svg.removeAttribute("height");
-  svg.setAttribute("preserveAspectRatio", "none");
-
-  const aspect = vb.width / vb.height;
-  const widthPx = Math.min(vb.width, window.innerWidth * 0.6) || 360;
-  widget.style.width = widthPx + "px";
-  widgetInner.style.height = (widthPx / aspect) + "px";
-
-  return { svg, vb };
+/* ---------- display / labels ---------- */
+function setLabels(title, tag){
+  $('songTitle').textContent = title || '\u2014';
+  if(tag !== undefined) $('nowPlayingTag').textContent = tag;
+  marquee();
 }
-
-/* ---------- 2. Find tagged elements ---------- */
-function findEl(svg, explicitId, keywords) {
-  if (explicitId) {
-    const el = svg.querySelector("#" + CSS.escape(explicitId));
-    if (el) return el;
-  }
-  for (const el of svg.querySelectorAll("*")) {
-    const label =
-      (el.id || "") + " " +
-      (el.getAttribute("class") || "") + " " +
-      (el.getAttribute("inkscape:label") || "") + " " +
-      (el.getAttribute("data-role") || "");
-    if (keywords.test(label)) return el;
-  }
-  return null;
-}
-
-/* Position overlay over an SVG element, with optional scale + offset */
-function placeOver(overlay, svgEl, vb, scale = 1, offX = 0, offY = 0) {
-  const b = svgEl.getBBox();
-  let left = ((b.x - vb.x) / vb.width)  * 100;
-  let top  = ((b.y - vb.y) / vb.height) * 100;
-  let w    = (b.width  / vb.width)  * 100;
-  let h    = (b.height / vb.height) * 100;
-
-  // scale around the centre so it grows symmetrically
-  const cx = left + w / 2, cy = top + h / 2;
-  w *= scale; h *= scale;
-  left = cx - w / 2 + offX;
-  top  = cy - h / 2 + offY;
-
-  overlay.style.left = left + "%";
-  overlay.style.top  = top  + "%";
-  overlay.style.width  = w + "%";
-  overlay.style.height = h + "%";
-
-  if (overlay === shutter) {
-    overlay.style.borderRadius =
-      Math.abs(b.width - b.height) < 4 ? "50%" : "12px";
-  }
-}
-
-/* ---------- 3. Webcam ---------- */
-async function startCamera() {
-  if (!navigator.mediaDevices?.getUserMedia) {
-    setStatus("Camera API not supported by this browser."); return;
-  }
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "user" }, audio: false
-    });
-    camVideo.srcObject = stream;
-    setStatus("Camera live — drag the widget, click the button to snap.");
-  } catch (err) {
-    setStatus("Camera blocked/denied: " + err.message);
-    camVideo.style.background =
-      "repeating-linear-gradient(45deg,#222,#222 10px,#333 10px,#333 20px)";
-  }
-}
-
-/* ---------- 4. Music (autoplay with interaction fallback) ---------- */
-function startMusic() {
-  music.volume = CONFIG.musicVolume;
-  music.play().catch(() => {
-    // Browser blocked autoplay — start on the first user gesture
-    const resume = () => { music.play().catch(() => {}); };
-    document.addEventListener("pointerdown", resume, { once: true });
-    document.addEventListener("keydown",     resume, { once: true });
+function marquee(){
+  const txt = $('songTitle'), g = $('titleScroll');
+  g.style.animation = 'none'; txt.setAttribute('x','300'); txt.setAttribute('text-anchor','start');
+  requestAnimationFrame(()=>{
+    const w = txt.getComputedTextLength(), budget = 270;
+    if(w > budget){
+      g.style.setProperty('--mq', -(w - budget + 24)+'px');
+      g.style.animation = 'mq ' + Math.max(5, w/26) + 's ease-in-out infinite alternate';
+    }
   });
 }
-
-/* ---------- 5. Take a photo ---------- */
-function takePhoto() {
-  if (!camVideo.videoWidth) { setStatus("No camera frame yet."); return; }
-
-  const canvas = document.createElement("canvas");
-  canvas.width  = camVideo.videoWidth;
-  canvas.height = camVideo.videoHeight;
-  canvas.getContext("2d").drawImage(camVideo, 0, 0);
-  const dataUrl = canvas.toDataURL("image/png");
-
-  flash.classList.add("fire");
-  requestAnimationFrame(() => requestAnimationFrame(() => flash.classList.remove("fire")));
-
-  const link = document.createElement("a");
-  link.href = dataUrl;
-  link.download = "photo_" + Date.now() + ".png";
-  link.title = "Click to download";
-  const thumb = document.createElement("img");
-  thumb.src = dataUrl;
-  link.appendChild(thumb);
-  tray.prepend(link);
-
-  setStatus("Photo captured — click the thumbnail to download.");
+function flagMissing(){
+  $('loadHint').textContent = '\u26A0 mp3 not found \u2014 tap here to pick the file';
+  $('loadHint').setAttribute('fill', 'var(--coral)');
 }
 
-/* ---------- 6. Dragging ---------- */
-function makeDraggable(el) {
-  let startX, startY, originLeft, originTop, dragging = false;
+/* glyph + status sync */
+audio.addEventListener('play',  ()=>{ $('glyphPlay').style.display='none'; $('glyphPause').style.display=''; });
+audio.addEventListener('pause', ()=>{ $('glyphPlay').style.display='';     $('glyphPause').style.display='none'; });
+audio.addEventListener('ended', ()=>{ $('glyphPlay').style.display='';     $('glyphPause').style.display='none'; });
+audio.addEventListener('error', flagMissing);
+audio.addEventListener('loadedmetadata', ()=>{ $('loadHint').textContent='tap to load your own audio'; $('loadHint').setAttribute('fill','rgba(39,52,60,.5)'); });
 
-  el.addEventListener("pointerdown", (e) => {
-    if (e.target === shutter) return;
-    dragging = true;
-    el.setPointerCapture(e.pointerId);
-    const rect = el.getBoundingClientRect();
-    originLeft = rect.left; originTop = rect.top;
-    startX = e.clientX; startY = e.clientY;
-    el.classList.add("dragging");
-  });
-  el.addEventListener("pointermove", (e) => {
-    if (!dragging) return;
-    el.style.left = (originLeft + e.clientX - startX) + "px";
-    el.style.top  = (originTop  + e.clientY - startY) + "px";
-  });
-  const end = (e) => {
-    if (!dragging) return;
-    dragging = false;
-    el.classList.remove("dragging");
-    try { el.releasePointerCapture(e.pointerId); } catch (_) {}
-  };
-  el.addEventListener("pointerup", end);
-  el.addEventListener("pointercancel", end);
+function tick(){
+  const pos = audio.currentTime, dur = audio.duration;
+  const frac = isFinite(dur) && dur > 0 ? pos/dur : 0;
+  const x0 = 158.3, x1 = 518.8;
+  $('barFill').setAttribute('width', (frac*(x1-x0)).toFixed(1));
+  const knob = $('barKnob');
+  knob.setAttribute('cx', (x0 + frac*(x1-x0)).toFixed(1));
+  knob.setAttribute('r', isFinite(dur) && dur > 0 ? 6 : 0);
+  $('timeReadout').textContent = fmt(pos)+' / '+fmt(dur);
+  requestAnimationFrame(tick);
 }
 
-/* ---------- 7. Boot ---------- */
-(async function init() {
-  try {
-    const { svg, vb } = await loadLayout();
+/* ---------- seek by clicking the progress track ---------- */
+const svg = $('player');
+function svgPoint(e){
+  const pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY;
+  return pt.matrixTransform(svg.getScreenCTM().inverse());
+}
+$('barHit').addEventListener('click', e=>Player.seek((svgPoint(e).x - 158.3)/(518.8-158.3)));
 
-    const videoEl  = findEl(svg, CONFIG.videoElementId,  CONFIG.videoKeywords);
-    const buttonEl = findEl(svg, CONFIG.buttonElementId, CONFIG.buttonKeywords);
+/* ---------- load a user file via the display blob ---------- */
+const fileInput = Object.assign(document.createElement('input'), {type:'file', accept:'audio/*'});
+fileInput.style.display = 'none';
+document.body.appendChild(fileInput);
+$('songClip').addEventListener('click', ()=>fileInput.click());
+fileInput.addEventListener('change', e=>{
+  const f = e.target.files[0]; if(!f) return;
+  Player.loadFile(URL.createObjectURL(f), f.name.replace(/\.[^.]+$/,''));
+});
 
-    if (videoEl)
-      placeOver(camVideo, videoEl, vb, CONFIG.videoScale, CONFIG.videoOffsetX, CONFIG.videoOffsetY);
-    else setStatus("⚠ No video area found in SVG — set CONFIG.videoElementId.");
+/* ---------- DRAGGABLE player (body = handle, controls excluded) ---------- */
+const stage = $('stage');
+let offX = 0, offY = 0, drag = null;
+svg.addEventListener('pointerdown', e=>{
+  if(e.target.closest('.btn, #barHit, #songClip')) return;   // don't drag from controls
+  drag = {sx:e.clientX, sy:e.clientY, ox:offX, oy:offY};
+  svg.setPointerCapture(e.pointerId);
+  stage.classList.add('dragging');
+});
+svg.addEventListener('pointermove', e=>{
+  if(!drag) return;
+  offX = drag.ox + (e.clientX - drag.sx);
+  offY = drag.oy + (e.clientY - drag.sy);
+  stage.style.transform = 'translate(' + offX + 'px,' + offY + 'px)';
+});
+function endDrag(){ if(drag){ drag = null; stage.classList.remove('dragging'); } }
+svg.addEventListener('pointerup', endDrag);
+svg.addEventListener('pointercancel', endDrag);
 
-    if (buttonEl) placeOver(shutter, buttonEl, vb);
-    else setStatus("⚠ No button area found in SVG — set CONFIG.buttonElementId.");
+/* keyboard: space=play/pause, S=stop, ArrowRight=skip */
+addEventListener('keydown', e=>{
+  if(e.code==='Space'){e.preventDefault();Player.toggle();}
+  else if(e.key==='s'||e.key==='S'){Player.stop();}
+  else if(e.key==='ArrowRight'){Player.skip();}
+});
 
-    shutter.addEventListener("click", (e) => { e.stopPropagation(); takePhoto(); });
-    makeDraggable(widget);
-    startMusic();
-    await startCamera();
-  } catch (err) {
-    setStatus("Error: " + err.message);
-    console.error(err);
-  }
-})();
+/* marquee keyframes + boot */
+const kf = document.createElement('style');
+kf.textContent = '@keyframes mq{0%,15%{transform:translateX(0)}85%,100%{transform:translateX(var(--mq))}}';
+document.head.appendChild(kf);
+marquee(); tick();
 </script>
 </body>
 </html>
